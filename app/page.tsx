@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { AnalyzeResponse } from "@/lib/types";
 
@@ -92,7 +93,8 @@ export default function Home() {
 
   return (
     <main className="mx-auto max-w-2xl px-5 pb-36 pt-6">
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between">
+        <Link href="/upload" className="neo-sm px-4 py-2 text-sm font-semibold">Upload video →</Link>
         <div className="neo-sm flex gap-1 p-1" role="group" aria-label="Tema">
           {themes.map(([t, icon]) => (
             <button key={t} onClick={() => setTheme(t)} aria-label={`Tema ${t}`} aria-pressed={theme === t}
