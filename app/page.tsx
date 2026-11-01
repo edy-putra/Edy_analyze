@@ -1,76 +1,75 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AnalyzeResponse } from "@/lib/types";
 
 const nf = new Intl.NumberFormat("id-ID");
 const fmt = (n: number | null | undefined) => (n == null ? "-" : nf.format(Math.round(n)));
-const fmt1 = (n: number | null | undefined) =>
-  n == null ? "-" : n.toFixed(1).replace(".", ",");
+const fmt1 = (n: number | null | undefined) => (n == null ? "-" : n.toFixed(1).replace(".", ","));
+const pad = (x: number) => String(x).padStart(2, "0");
+const dur = (s: number) => {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`;
+};
+const tgl = (iso: string) =>
+  new Date(iso).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
+const bar = (s: number) => (s >= 75 ? "bg-good" : s >= 50 ? "bg-warn" : "bg-bad");
+const txt = (s: number) => (s >= 75 ? "text-good" : s >= 50 ? "text-warn" : "text-bad");
 
-function dur(s: number) {
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  const pad = (x: number) => String(x).padStart(2, "0");
-  return h ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
-}
-
-function tanggal(iso: string) {
-  return new Date(iso).toLocaleDateString("id-ID", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-const barColor = (s: number) => (s >= 75 ? "bg-good" : s >= 50 ? "bg-warn" : "bg-bad");
-const textColor = (s: number) => (s >= 75 ? "text-good" : s >= 50 ? "text-warn" : "text-bad");
-const dampakColor = (d: string) =>
-  d === "tinggi" ? "bg-bad text-white" : d === "sedang" ? "bg-warn text-white" : "bg-line text-ink";
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Card({ tag, title, children }: { tag: string; title: string; children: React.ReactNode }) {
   return (
-    <section className="mt-10">
-      <h2 className="font-display text-2xl font-semibold tracking-tight">{title}</h2>
-      <div className="mt-4">{children}</div>
+    <section className="neo mt-6 p-5">
+      <span className="tag">{tag}</span>
+      <h2 className="mt-3 text-lg font-bold">{title}</h2>
+      <div className="mt-3">{children}</div>
     </section>
   );
 }
 
-function Bullets({ items }: { items?: string[] }) {
-  if (!items || !items.length) return null;
+function List({ items }: { items?: string[] }) {
+  if (!items?.length) return null;
   return (
     <ul className="mt-2 list-disc space-y-1.5 pl-5 text-[15px] leading-relaxed">
-      {items.map((t, i) => (
-        <li key={i}>{t}</li>
-      ))}
+      {items.map((t, i) => <li key={i}>{t}</li>)}
     </ul>
   );
 }
 
-function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function Chip({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-line bg-white p-3.5">
-      <div className="text-sm text-muted">{label}</div>
-      <div className="mt-0.5 font-display text-xl font-semibold">{value}</div>
-      {hint ? <div className="mt-0.5 text-xs text-muted">{hint}</div> : null}
+    <div className="neo-in px-4 py-3">
+      <div className="text-xs text-muted">{label}</div>
+      <div className="mt-0.5 text-lg font-bold">{value}</div>
     </div>
   );
 }
+
+type Theme = "auto" | "light" | "dark";
 
 export default function Home() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AnalyzeResponse | null>(null);
+  const [theme, setTheme] = useState<Theme>("auto");
+
+  useEffect(() => {
+    try {
+      const t = localStorage.getItem("theme");
+      if (t === "light" || t === "dark") setTheme(t);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    const r = document.documentElement;
+    if (theme === "auto") r.removeAttribute("data-theme");
+    else r.setAttribute("data-theme", theme);
+    try { localStorage.setItem("theme", theme); } catch {}
+  }, [theme]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!url.trim() || loading) return;
-    setLoading(true);
-    setError(null);
-    setData(null);
+    setLoading(true); setError(null); setData(null);
     try {
       const res = await fetch("/api/analyze", {
         method: "POST",
@@ -89,260 +88,196 @@ export default function Home() {
 
   const a = data?.analysis ?? null;
   const m = data?.metrics ?? null;
+  const themes: [Theme, string][] = [["auto", "◐"], ["light", "☀"], ["dark", "☾"]];
 
   return (
-    <main className="mx-auto max-w-3xl px-5 pb-20 pt-10 sm:pt-16">
-      <h1 className="font-display text-4xl font-bold tracking-tight sm:text-5xl">Edy Analyze</h1>
-      <p className="mt-3 max-w-xl text-lg leading-relaxed text-muted">
-        Tempel link video YouTube. Kamu akan melihat apa yang kurang dari video itu dan apa yang
-        harus diperbaiki lebih dulu.
-      </p>
+    <main className="mx-auto max-w-2xl px-5 pb-36 pt-6">
+      <div className="flex justify-end">
+        <div className="neo-sm flex gap-1 p-1" role="group" aria-label="Tema">
+          {themes.map(([t, icon]) => (
+            <button key={t} onClick={() => setTheme(t)} aria-label={`Tema ${t}`} aria-pressed={theme === t}
+              className={`h-9 w-9 rounded-full text-base ${theme === t ? "on" : ""}`}>{icon}</button>
+          ))}
+        </div>
+      </div>
 
-      <form onSubmit={submit} className="mt-8 flex flex-col gap-3 sm:flex-row">
+      <header className="mt-4 text-center">
+        <div className="neo mx-auto flex h-16 w-16 items-center justify-center rounded-full text-2xl text-accent">▶</div>
+        <h1 className="mt-4 text-3xl font-extrabold tracking-tight">Edy Analyze</h1>
+        <p className="mt-1 text-sm text-muted">Link video jadi diagnosis · Gemini</p>
+      </header>
+
+      <form id="f" onSubmit={submit} className="neo mt-8 p-5">
+        <span className="tag">LANGKAH 1</span>
+        <h2 className="mt-3 text-lg font-bold">Tempel link video</h2>
         <input
-          type="text"
-          inputMode="url"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://www.youtube.com/watch?v=..."
-          aria-label="Link video YouTube"
-          className="min-w-0 flex-1 rounded-lg border border-line bg-white px-4 py-3 text-base"
+          type="text" inputMode="url" value={url} onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://www.youtube.com/watch?v=..." aria-label="Link video YouTube"
+          className="neo-in mt-3 w-full bg-transparent px-4 py-3.5 text-base outline-none placeholder:text-muted"
         />
-        <button
-          type="submit"
-          disabled={loading || !url.trim()}
-          className="rounded-lg bg-accent px-6 py-3 font-semibold text-white disabled:opacity-50"
-        >
-          {loading ? "Menganalisa…" : "Analisa video"}
-        </button>
+        <p className="mt-2 text-xs text-muted">Bisa link biasa, youtu.be, atau Shorts.</p>
       </form>
 
-      {loading && (
-        <p className="mt-6 text-muted">
-          Mengambil data video dan menyusun diagnosis. Biasanya 10 sampai 20 detik.
-        </p>
-      )}
-
-      {error && (
-        <div role="alert" className="mt-6 rounded-lg border border-bad/40 bg-bad/10 p-4 text-bad">
-          {error}
-        </div>
-      )}
+      {loading && <p className="mt-6 text-center text-sm text-muted">Mengambil data dan menyusun diagnosis. Biasanya 10 sampai 20 detik.</p>}
+      {error && <div role="alert" className="neo mt-6 p-4 text-sm font-medium text-bad">{error}</div>}
 
       {data && m && (
         <div>
-          {/* Ringkasan video */}
-          <div className="mt-10 flex flex-col gap-4 sm:flex-row">
-            {data.video.thumbnail ? (
+          <section className="neo mt-6 p-5">
+            <span className="tag">VIDEO</span>
+            {data.video.thumbnail && (
               // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={data.video.thumbnail}
-                alt="Thumbnail video"
-                className="aspect-video w-full rounded-lg border border-line object-cover sm:w-64"
-              />
-            ) : null}
-            <div className="min-w-0">
-              <h2 className="font-display text-xl font-semibold leading-snug">{data.video.title}</h2>
-              <p className="mt-1 text-muted">
-                {data.channel.title}
-                {data.channel.subscribers != null
-                  ? `, ${fmt(data.channel.subscribers)} subscriber`
-                  : ""}
+              <img src={data.video.thumbnail} alt="Thumbnail" className="mt-3 aspect-video w-full rounded-2xl object-cover" />
+            )}
+            <h2 className="mt-3 font-bold leading-snug">{data.video.title}</h2>
+            <p className="mt-1 text-sm text-muted">
+              {data.channel.title}{data.channel.subscribers != null ? ` · ${fmt(data.channel.subscribers)} subscriber` : ""}
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              Tayang {tgl(data.video.publishedAt)} ({m.self.hari}, {m.self.jam}.00 WIB) · {dur(data.video.durationSec)}
+            </p>
+            {data.overall != null && (
+              <p className="mt-4 text-sm text-muted">
+                Skor keseluruhan <span className={`text-2xl font-extrabold ${txt(data.overall)}`}>{data.overall}</span> / 100
               </p>
-              <p className="mt-1 text-sm text-muted">
-                Tayang {tanggal(data.video.publishedAt)} ({m.self.hari}, jam {m.self.jam}.00 WIB),
-                durasi {dur(data.video.durationSec)}
-              </p>
-              {data.overall != null && (
-                <p className="mt-3">
-                  Skor keseluruhan{" "}
-                  <span className={`font-display text-2xl font-bold ${textColor(data.overall)}`}>
-                    {data.overall}
-                  </span>
-                  <span className="text-muted"> / 100</span>
-                </p>
-              )}
+            )}
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <Chip label="Views" value={fmt(data.video.views)} />
+              <Chip label="Per hari" value={fmt(m.viewsPerDay)} />
+              <Chip label="Like" value={data.video.likesHidden ? "Disembunyikan" : `${fmt(data.video.likes)}${m.likeRate != null ? ` (${fmt1(m.likeRate)}%)` : ""}`} />
+              <Chip label="Komentar" value={fmt(data.video.comments)} />
             </div>
-          </div>
+            {m.rank != null && (
+              <p className="mt-3 text-xs text-muted">Peringkat views {m.rank} dari {m.totalCompared + 1} video terbaru channel ini.</p>
+            )}
+            {data.cached && <p className="mt-1 text-xs text-muted">Hasil dari cache (kurang dari 6 jam).</p>}
+          </section>
 
-          <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Stat label="Views" value={fmt(data.video.views)} hint={`${fmt(m.viewsPerDay)} per hari`} />
-            <Stat
-              label="Likes"
-              value={data.video.likesHidden ? "Disembunyikan" : fmt(data.video.likes)}
-              hint={m.likeRate != null ? `${fmt1(m.likeRate)}% dari views` : undefined}
-            />
-            <Stat
-              label="Komentar"
-              value={fmt(data.video.comments)}
-              hint={m.commentsPer1k != null ? `${fmt1(m.commentsPer1k)} per 1.000 views` : undefined}
-            />
-            <Stat
-              label="Peringkat di channel"
-              value={m.rank != null ? `${m.rank} dari ${m.totalCompared + 1}` : "-"}
-              hint="berdasarkan views, video terbaru"
-            />
-          </div>
-
-          {data.cached && (
-            <p className="mt-3 text-sm text-muted">Hasil dari cache (kurang dari 6 jam lalu).</p>
-          )}
-
-          {/* Diagnosis */}
           {a ? (
             <>
-              <Section title="Diagnosis">
-                <p className="font-display text-xl font-medium leading-snug">{a.diagnosis_utama}</p>
-                <p className="mt-3 leading-relaxed text-muted">{a.ringkasan}</p>
-              </Section>
-
-              <Section title="Yang harus diperbaiki, berurutan">
+              <Card tag="DIAGNOSIS" title="Yang paling menahan video ini">
+                <p className="text-lg font-semibold leading-snug">{a.diagnosis_utama}</p>
+                <p className="mt-3 text-[15px] leading-relaxed text-muted">{a.ringkasan}</p>
+              </Card>
+              <Card tag="PRIORITAS" title="Perbaiki berurutan">
                 <ol className="space-y-3">
                   {(a.prioritas ?? []).map((p, i) => (
-                    <li key={i} className="rounded-lg border border-line bg-white p-4">
+                    <li key={i} className="neo-in p-4">
                       <div className="flex items-start justify-between gap-3">
-                        <p className="font-semibold leading-snug">
-                          {i + 1}. {p.aksi}
-                        </p>
-                        <span
-                          className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${dampakColor(
-                            p.dampak,
-                          )}`}
-                        >
-                          dampak {p.dampak}
-                        </span>
+                        <p className="font-semibold leading-snug">{i + 1}. {p.aksi}</p>
+                        <span className="neo-sm shrink-0 px-3 py-1 text-xs font-bold text-accent">{p.dampak}</span>
                       </div>
-                      <p className="mt-1.5 text-[15px] leading-relaxed text-muted">{p.alasan}</p>
+                      <p className="mt-1.5 text-sm leading-relaxed text-muted">{p.alasan}</p>
                     </li>
                   ))}
                 </ol>
-              </Section>
+              </Card>
             </>
           ) : (
-            <div className="mt-8 rounded-lg border border-warn/50 bg-warn/10 p-4">
-              <p className="font-semibold">Analisa AI belum tersedia</p>
-              <p className="mt-1 text-[15px]">
-                {data.analysisError ?? "Terjadi masalah saat menjalankan analisa AI."} Skor dan
-                perbandingan di bawah tetap berasal dari data video.
-              </p>
+            <div className="neo mt-6 p-5">
+              <span className="tag">INFO</span>
+              <p className="mt-3 font-semibold">Analisa AI belum tersedia</p>
+              <p className="mt-1 text-sm text-muted">{data.analysisError ?? "Terjadi masalah saat menjalankan analisa AI."} Skor dan perbandingan tetap dari data video.</p>
             </div>
           )}
 
-          {/* Skor */}
-          <Section title="Skor per aspek">
+          <Card tag="SKOR" title="Nilai per aspek">
             <ul className="space-y-4">
               {data.scores.map((s) => (
                 <li key={s.key}>
                   <div className="flex items-baseline justify-between">
-                    <span className="font-medium">{s.label}</span>
-                    <span className={`font-display font-semibold ${textColor(s.score)}`}>
-                      {s.score}
-                    </span>
+                    <span className="text-sm font-semibold">{s.label}</span>
+                    <span className={`font-bold ${txt(s.score)}`}>{s.score}</span>
                   </div>
-                  <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-line">
-                    <div
-                      className={`h-full rounded-full ${barColor(s.score)}`}
-                      style={{ width: `${s.score}%` }}
-                    />
+                  <div className="neo-in mt-1.5 h-3 overflow-hidden rounded-full p-0.5">
+                    <div className={`h-full rounded-full ${bar(s.score)}`} style={{ width: `${Math.max(s.score, 4)}%` }} />
                   </div>
-                  <p className="mt-1 text-sm text-muted">{s.note}</p>
+                  <p className="mt-1 text-xs text-muted">{s.note}</p>
                 </li>
               ))}
             </ul>
-          </Section>
+          </Card>
 
           {a && (
             <>
-              <Section title="Judul">
-                <p className="leading-relaxed">{a.judul?.penilaian}</p>
-                <Bullets items={a.judul?.saran} />
-              </Section>
-
+              <Card tag="JUDUL" title="Penilaian judul">
+                <p className="text-[15px] leading-relaxed">{a.judul?.penilaian}</p>
+                <List items={a.judul?.saran} />
+              </Card>
               {a.thumbnail && (
-                <Section title="Thumbnail">
-                  <p className="leading-relaxed">{a.thumbnail.penilaian}</p>
-                  <Bullets items={a.thumbnail.saran} />
-                </Section>
+                <Card tag="THUMBNAIL" title="Penilaian thumbnail">
+                  <p className="text-[15px] leading-relaxed">{a.thumbnail.penilaian}</p>
+                  <List items={a.thumbnail.saran} />
+                </Card>
               )}
-
-              <Section title="Deskripsi dan tag">
-                <p className="leading-relaxed">{a.deskripsi_tag?.penilaian}</p>
-                <Bullets items={a.deskripsi_tag?.saran} />
-              </Section>
-
-              <Section title="Komentar penonton">
-                <p className="leading-relaxed">{a.komentar?.sentimen}</p>
-                {a.komentar?.topik?.length ? (
-                  <>
-                    <h3 className="mt-4 font-semibold">Yang sering dibahas</h3>
-                    <Bullets items={a.komentar.topik} />
-                  </>
-                ) : null}
-                {a.komentar?.pertanyaan?.length ? (
-                  <>
-                    <h3 className="mt-4 font-semibold">Pertanyaan yang belum terjawab</h3>
-                    <Bullets items={a.komentar.pertanyaan} />
-                  </>
-                ) : null}
-                {a.komentar?.keluhan?.length ? (
-                  <>
-                    <h3 className="mt-4 font-semibold">Keluhan berulang</h3>
-                    <Bullets items={a.komentar.keluhan} />
-                  </>
-                ) : null}
-              </Section>
+              <Card tag="DESKRIPSI" title="Deskripsi dan tag">
+                <p className="text-[15px] leading-relaxed">{a.deskripsi_tag?.penilaian}</p>
+                <List items={a.deskripsi_tag?.saran} />
+              </Card>
+              <Card tag="KOMENTAR" title="Suara penonton">
+                <p className="text-[15px] leading-relaxed">{a.komentar?.sentimen}</p>
+                {([["Sering dibahas", a.komentar?.topik], ["Pertanyaan belum terjawab", a.komentar?.pertanyaan], ["Keluhan berulang", a.komentar?.keluhan]] as [string, string[] | undefined][])
+                  .filter(([, v]) => v?.length)
+                  .map(([h, v]) => (
+                    <div key={h} className="mt-4">
+                      <h3 className="text-sm font-bold">{h}</h3>
+                      <List items={v} />
+                    </div>
+                  ))}
+              </Card>
             </>
           )}
 
-          {/* Perbandingan */}
           {m.rows.length > 0 && (
-            <Section title="Dibanding video terbaru lain di channel ini">
+            <Card tag="PEMBANDING" title="Dibanding video lain di channel">
               <p className="mb-3 text-sm text-muted">
-                Median views channel: {fmt(m.channelMedianViews)}. Video ini{" "}
-                {m.viewsVsMedian != null ? `${fmt1(m.viewsVsMedian)}x` : "-"} dari median.
+                Median views {fmt(m.channelMedianViews)}. Video ini {m.viewsVsMedian != null ? `${fmt1(m.viewsVsMedian)}x` : "-"} dari median.
               </p>
-              <div className="overflow-x-auto rounded-lg border border-line bg-white">
-                <table className="w-full min-w-[560px] text-left text-sm">
-                  <thead className="border-b border-line text-muted">
+              <div className="neo-in overflow-x-auto p-2">
+                <table className="w-full min-w-[520px] text-left text-sm">
+                  <thead className="text-muted">
                     <tr>
-                      <th className="px-3 py-2 font-medium">Judul</th>
-                      <th className="px-3 py-2 text-right font-medium">Views</th>
-                      <th className="px-3 py-2 text-right font-medium">Per hari</th>
-                      <th className="px-3 py-2 text-right font-medium">Like</th>
-                      <th className="px-3 py-2 text-right font-medium">Durasi</th>
-                      <th className="px-3 py-2 font-medium">Tayang</th>
+                      <th className="px-2 py-2 font-medium">Judul</th>
+                      <th className="px-2 py-2 text-right font-medium">Views</th>
+                      <th className="px-2 py-2 text-right font-medium">Per hari</th>
+                      <th className="px-2 py-2 text-right font-medium">Durasi</th>
+                      <th className="px-2 py-2 font-medium">Tayang</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {[{ ...m.self, title: `${m.self.title} (video ini)` }, ...m.rows].map((r, i) => (
-                      <tr key={`${r.id}-${i}`} className={i === 0 ? "bg-accent/5 font-medium" : ""}>
-                        <td className="max-w-[220px] truncate px-3 py-2" title={r.title}>
-                          {r.title}
-                        </td>
-                        <td className="px-3 py-2 text-right">{fmt(r.views)}</td>
-                        <td className="px-3 py-2 text-right">{fmt(r.viewsPerDay)}</td>
-                        <td className="px-3 py-2 text-right">
-                          {r.likeRate != null ? `${fmt1(r.likeRate)}%` : "-"}
-                        </td>
-                        <td className="px-3 py-2 text-right">{dur(r.durationSec)}</td>
-                        <td className="whitespace-nowrap px-3 py-2">
-                          {r.hari}, {r.jam}.00
-                        </td>
+                    {[{ ...m.self, title: `${m.self.title} (ini)` }, ...m.rows].map((r, i) => (
+                      <tr key={`${r.id}-${i}`} className={i === 0 ? "font-bold text-accent" : ""}>
+                        <td className="max-w-[180px] truncate px-2 py-2" title={r.title}>{r.title}</td>
+                        <td className="px-2 py-2 text-right">{fmt(r.views)}</td>
+                        <td className="px-2 py-2 text-right">{fmt(r.viewsPerDay)}</td>
+                        <td className="px-2 py-2 text-right">{dur(r.durationSec)}</td>
+                        <td className="whitespace-nowrap px-2 py-2">{r.hari}, {r.jam}.00</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-            </Section>
+            </Card>
           )}
 
-          <p className="mt-10 text-sm leading-relaxed text-muted">
+          <p className="mt-8 text-xs leading-relaxed text-muted">
             {a?.catatan_keterbatasan ? `${a.catatan_keterbatasan} ` : ""}
-            Retention, CTR, dan impressions tidak ada di data publik, jadi diagnosis ini berdasarkan
-            data yang terlihat dari luar.
+            Retention, CTR, dan impressions tidak ada di data publik, jadi diagnosis ini berdasarkan data yang terlihat dari luar.
           </p>
         </div>
       )}
+
+      <div className="fixed inset-x-0 bottom-0 z-10 px-4 pb-4 pt-3" style={{ background: "var(--bg)", paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
+        <div className="mx-auto flex max-w-2xl items-center justify-between gap-4">
+          <div className="min-w-0 text-sm">
+            <div className="font-bold">{data?.overall != null ? `Skor ${data.overall}/100` : "Siap menganalisa"}</div>
+            <div className="truncate text-xs text-muted">{data ? data.video.title : "Tempel link di atas"}</div>
+          </div>
+          <button type="submit" form="f" disabled={loading || !url.trim()} className="btn shrink-0">
+            {loading ? "Menganalisa…" : "Analisa"}
+          </button>
+        </div>
+      </div>
     </main>
   );
 }
