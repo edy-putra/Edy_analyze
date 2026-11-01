@@ -106,7 +106,11 @@ export async function analyzeWithLLM(
 ): Promise<Analysis> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new AppError("GEMINI_API_KEY belum diatur. Metrik tetap ditampilkan tanpa analisa AI.", 500);
-  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+
+  // Model dicoba berurutan. Kalau satu sudah dipensiunkan (404), lanjut ke berikutnya.
+  const models = Array.from(
+    new Set([process.env.GEMINI_MODEL, "gemini-3.1-flash-lite", "gemini-3.5-flash"].filter(Boolean)),
+  ) as string[];
 
   const thumb = await fetchThumbnail(data.video.id, data.video.thumbnail);
   const prompt =
@@ -118,31 +122,37 @@ export async function analyzeWithLLM(
   const parts: any[] = [{ text: prompt }];
   if (thumb) parts.push({ inlineData: { mimeType: thumb.mime, data: thumb.b64 } });
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYSTEM }] },
-        contents: [{ role: "user", parts }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          temperature: 0.4,
-          thinkingConfig: { thinkingBudget: 0 },
-        },
-      }),
-      signal: AbortSignal.timeout(50_000),
-    },
-  );
+  const body = JSON.stringify({
+    systemInstruction: { parts: [{ text: SYSTEM }] },
+    contents: [{ role: "user", parts }],
+    generationConfig: { responseMimeType: "application/json", temperature: 0.4 },
+  });
 
-  if (!res.ok) {
-    if (res.status === 429) throw new AppError("Kuota Gemini sedang habis. Coba lagi beberapa saat lagi.", 429);
-    if (res.status === 400 || res.status === 403) {
-      const body = await res.json().catch(() => null);
-      throw new AppError(`Gemini menolak permintaan: ${body?.error?.message ?? res.status}`, 502);
+  let res: Response | null = null;
+  for (const model of models) {
+    res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body,
+        signal: AbortSignal.timeout(50_000),
+      },
+    );
+    if (res.status !== 404) break;
+  }
+
+  if (!res || !res.ok) {
+    const status = res?.status ?? 0;
+    if (status === 429) throw new AppError("Kuota Gemini sedang habis. Coba lagi beberapa saat lagi.", 429);
+    if (status === 404) {
+      throw new AppError(
+        "Model Gemini tidak ditemukan. Isi GEMINI_MODEL di Vercel dengan model yang masih aktif.",
+        502,
+      );
     }
-    throw new AppError(`Gemini error (${res.status}).`, 502);
+    const err = await res?.json().catch(() => null);
+    throw new AppError(`Gemini menolak permintaan (${status}): ${err?.error?.message ?? "tanpa detail"}`, 502);
   }
 
   const json = await res.json();
