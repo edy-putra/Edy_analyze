@@ -84,7 +84,7 @@ export interface Analysis {
     keluhan: string[];
   };
   catatan_keterbatasan: string;
-  sumber?: "silang" | "gemini" | "mistral";
+  sumber?: "silang" | "gemini" | "groq";
   kesepakatan?: string[];
   perbedaan?: string[];
 }
