@@ -106,7 +106,7 @@ export default function Home() {
       <header className="mt-4 text-center">
         <div className="neo mx-auto flex h-16 w-16 items-center justify-center rounded-full text-2xl text-accent">▶</div>
         <h1 className="mt-4 text-3xl font-extrabold tracking-tight">Edy Analyze</h1>
-        <p className="mt-1 text-sm text-muted">Link video jadi diagnosis · Gemini</p>
+        <p className="mt-1 text-sm text-muted">Link video jadi diagnosis · By Edy Putra </p>
       </header>
 
       <form id="f" onSubmit={submit} className="neo mt-8 p-5">
