@@ -3,11 +3,14 @@
 import Link from "next/link";
 import { useState } from "react";
 import ThemeToggle from "../ThemeToggle";
-import type { VideoAnalysis } from "@/lib/videoTypes";
+import type { Penilaian, VideoAnalysis } from "@/lib/videoTypes";
 
 type Kind = "auto" | "shorts" | "long";
 const MAX = 200 * 1024 * 1024;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const clampPct = (n: unknown) => Math.max(0, Math.min(100, Math.round(Number(n) || 0)));
+const bar = (s: number) => (s >= 75 ? "bg-good" : s >= 50 ? "bg-warn" : "bg-bad");
+const txt = (s: number) => (s >= 75 ? "text-good" : s >= 50 ? "text-warn" : "text-bad");
 
 function readDuration(f: File): Promise<number> {
   return new Promise((res) => {
@@ -46,6 +49,35 @@ function Copy({ text }: { text: string }) {
   );
 }
 
+function Stars({ pct }: { pct: number }) {
+  const n = Math.max(0, Math.min(5, Math.round(pct / 20)));
+  return (
+    <span aria-label={`${n} dari 5 bintang`} className="whitespace-nowrap tracking-wide text-warn">
+      {"★".repeat(n)}<span className="text-line">{"★".repeat(5 - n)}</span>
+    </span>
+  );
+}
+
+function Rate({ label, p }: { label: string; p?: Penilaian }) {
+  if (!p) return null;
+  const s = clampPct(p.skor);
+  return (
+    <li>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-sm font-semibold">{label}</span>
+        <span className="flex items-center gap-2 text-sm">
+          <Stars pct={s} />
+          <span className={`font-bold ${txt(s)}`}>{s}%</span>
+        </span>
+      </div>
+      <div className="neo-in mt-1.5 h-3 overflow-hidden rounded-full p-0.5">
+        <div className={`h-full rounded-full ${bar(s)}`} style={{ width: `${Math.max(s, 4)}%` }} />
+      </div>
+      <p className="mt-1 text-xs text-muted">{p.alasan}</p>
+    </li>
+  );
+}
+
 function Card({ tag, title, action, children }: { tag: string; title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
     <section className="neo mt-6 p-5">
@@ -68,7 +100,7 @@ export default function UploadPage() {
   const [phase, setPhase] = useState<"idle" | "upload" | "analyze">("idle");
   const [pct, setPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [r, setR] = useState<(VideoAnalysis) | null>(null);
+  const [r, setR] = useState<VideoAnalysis | null>(null);
 
   async function pick(f: File | undefined) {
     setError(null); setR(null);
@@ -115,6 +147,8 @@ export default function UploadPage() {
   const busy = phase !== "idle";
   const mb = file ? (file.size / 1048576).toFixed(1).replace(".", ",") : "";
   const menit = dur ? `${Math.floor(dur / 60)}:${String(Math.round(dur % 60)).padStart(2, "0")}` : "";
+  const bestTitle = r?.judul?.length ? Math.max(...r.judul.map((j) => clampPct(j.skor))) : -1;
+  const potensiWarna = (p?: string) => (p === "tinggi" ? "text-good" : p === "sedang" ? "text-warn" : "text-bad");
 
   return (
     <main className="mx-auto max-w-2xl px-5 pb-36 pt-6">
@@ -126,7 +160,7 @@ export default function UploadPage() {
       <header className="mt-4 text-center">
         <div className="neo mx-auto flex h-16 w-16 items-center justify-center rounded-full text-2xl text-accent">⬆</div>
         <h1 className="mt-4 text-3xl font-extrabold tracking-tight">Upload video</h1>
-        <p className="mt-1 text-sm text-muted">Judul, hashtag, dan deskripsi dari isi videomu · By Edy Putra</p>
+        <p className="mt-1 text-sm text-muted">Judul, hashtag, dan deskripsi dari isi videomu</p>
       </header>
 
       <section className="neo mt-8 p-5">
@@ -172,17 +206,58 @@ export default function UploadPage() {
             <p className="text-[15px] leading-relaxed">{r.ringkasan}</p>
           </Card>
 
+          {r.skor && (
+            <Card tag="SKOR" title="Penilaian hasil">
+              <ul className="space-y-4">
+                <Rate label="Potensi konten" p={r.skor.potensi} />
+                <Rate label="Hook (detik awal)" p={r.skor.hook} />
+                <Rate label="Judul" p={r.skor.judul} />
+                <Rate label="Deskripsi" p={r.skor.deskripsi} />
+                <Rate label="Hashtag" p={r.skor.hashtag} />
+              </ul>
+              <p className="mt-4 text-xs leading-relaxed text-muted">
+                Ini penilaian AI atas isi video dan hasil tulisannya, bukan prediksi views. Pakai untuk membandingkan opsi, bukan sebagai angka mutlak.
+              </p>
+            </Card>
+          )}
+
+          {r.audiens && (
+            <Card tag="AUDIENS" title="Siapa yang cocok menonton">
+              <p className="text-sm text-muted">
+                Potensi jangkauan{" "}
+                <span className={`font-extrabold capitalize ${potensiWarna(r.audiens.potensi)}`}>{r.audiens.potensi}</span>
+              </p>
+              <p className="mt-2 text-[15px] leading-relaxed">{r.audiens.profil}</p>
+              {r.audiens.minat?.length ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {r.audiens.minat.map((m, i) => <span key={i} className="neo-sm px-3 py-1.5 text-xs font-semibold">{m}</span>)}
+                </div>
+              ) : null}
+              <p className="mt-3 text-sm leading-relaxed text-muted">{r.audiens.alasan}</p>
+              {r.audiens.pendorong?.length ? (<><h3 className="mt-4 text-sm font-bold">Yang membantu</h3><Bullets items={r.audiens.pendorong} /></>) : null}
+              {r.audiens.penghambat?.length ? (<><h3 className="mt-4 text-sm font-bold">Yang menghambat</h3><Bullets items={r.audiens.penghambat} /></>) : null}
+            </Card>
+          )}
+
           <Card tag="JUDUL" title="Pilihan judul">
             <ul className="space-y-3">
-              {(r.judul ?? []).map((j, i) => (
-                <li key={i} className="neo-in flex items-start justify-between gap-3 p-4">
-                  <div className="min-w-0">
-                    <p className="font-semibold leading-snug">{j.teks}</p>
-                    <p className="mt-1 text-xs text-muted">{j.teks.length} karakter · {j.gaya}</p>
-                  </div>
-                  <Copy text={j.teks} />
-                </li>
-              ))}
+              {(r.judul ?? []).map((j, i) => {
+                const s = clampPct(j.skor);
+                return (
+                  <li key={i} className="neo-in flex items-start justify-between gap-3 p-4">
+                    <div className="min-w-0">
+                      <p className="font-semibold leading-snug">{j.teks}</p>
+                      <p className="mt-1.5 flex flex-wrap items-center gap-x-2 text-xs text-muted">
+                        <Stars pct={s} />
+                        <span className={`font-bold ${txt(s)}`}>{s}%</span>
+                        <span>· {j.teks.length} karakter · {j.gaya}</span>
+                      </p>
+                      {s === bestTitle && <span className="tag mt-2">TERBAIK</span>}
+                    </div>
+                    <Copy text={j.teks} />
+                  </li>
+                );
+              })}
             </ul>
           </Card>
 
