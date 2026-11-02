@@ -106,7 +106,7 @@ export default function Home() {
       <header className="mt-4 text-center">
         <div className="neo mx-auto flex h-16 w-16 items-center justify-center rounded-full text-2xl text-accent">▶</div>
         <h1 className="mt-4 text-3xl font-extrabold tracking-tight">Edy Analyze</h1>
-        <p className="mt-1 text-sm text-muted">Link video jadi diagnosis · By Edy Putra </p>
+        <p className="mt-1 text-sm text-muted">Link video jadi diagnosis</p>
       </header>
 
       <form id="f" onSubmit={submit} className="neo mt-8 p-5">
@@ -157,6 +157,19 @@ export default function Home() {
 
           {a ? (
             <>
+              {a.sumber && (
+                <section className="neo mt-6 p-5">
+                  <span className="tag">SUMBER ANALISA</span>
+                  <p className="mt-3 font-semibold">
+                    {a.sumber === "silang" ? "Analisa silang: Gemini + Mistral" : a.sumber === "gemini" ? "Analisa Gemini saja" : "Analisa Mistral saja"}
+                  </p>
+                  <p className="mt-1 text-sm text-muted">
+                    {a.sumber === "silang"
+                      ? "Dua model menganalisa terpisah, lalu hasilnya diperiksa terhadap data dan digabung."
+                      : "Model satunya tidak tersedia saat ini (kuota habis atau error), jadi tidak ada analisa silang."}
+                  </p>
+                </section>
+              )}
               <Card tag="DIAGNOSIS" title="Yang paling menahan video ini">
                 <p className="text-lg font-semibold leading-snug">{a.diagnosis_utama}</p>
                 <p className="mt-3 text-[15px] leading-relaxed text-muted">{a.ringkasan}</p>
@@ -174,6 +187,16 @@ export default function Home() {
                   ))}
                 </ol>
               </Card>
+              {a.kesepakatan?.length ? (
+                <Card tag="SEPAKAT" title="Disepakati kedua model">
+                  <List items={a.kesepakatan} />
+                </Card>
+              ) : null}
+              {a.perbedaan?.length ? (
+                <Card tag="BEDA" title="Perbedaan pendapat">
+                  <List items={a.perbedaan} />
+                </Card>
+              ) : null}
             </>
           ) : (
             <div className="neo mt-6 p-5">
