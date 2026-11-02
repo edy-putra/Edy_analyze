@@ -26,12 +26,12 @@ Jika komentar tidak tersedia, isi array komentar dengan [] dan sentimen dengan "
 
 const r1 = (n: number | null) => (n === null ? null : Math.round(n * 10) / 10);
 
-function buildPayload(data: YtData, m: Metrics, scores: Score[]) {
+function buildPayload(data: YtData, m: Metrics, scores: Score[], slim = false) {
   const v = data.video;
   return {
     video: {
       judul: v.title,
-      deskripsi: v.description.slice(0, 1500),
+      deskripsi: v.description.slice(0, slim ? 600 : 1500),
       tag: v.tags.slice(0, 30),
       durasi_detik: v.durationSec,
       tayang_utc: v.publishedAt,
@@ -58,7 +58,7 @@ function buildPayload(data: YtData, m: Metrics, scores: Score[]) {
       jumlah_video_pembanding: m.totalCompared,
     },
     skor_otomatis: scores.map((s) => ({ aspek: s.label, skor: s.score, catatan: s.note })),
-    video_pembanding: m.rows.map((r) => ({
+    video_pembanding: m.rows.slice(0, slim ? 8 : 15).map((r) => ({
       judul: r.title,
       views: r.views,
       views_per_hari: r1(r.viewsPerDay),
@@ -67,7 +67,7 @@ function buildPayload(data: YtData, m: Metrics, scores: Score[]) {
       hari_tayang: r.hari,
       jam_tayang: r.jam,
     })),
-    komentar_teratas: data.comments.slice(0, 40).map((c) => c.text.slice(0, 250)),
+    komentar_teratas: data.comments.slice(0, slim ? 15 : 40).map((c) => c.text.slice(0, slim ? 160 : 250)),
     komentar_dimatikan_atau_tidak_tersedia: data.commentsDisabled,
   };
 }
@@ -99,10 +99,10 @@ function parseJson(text: string): Analysis {
   return JSON.parse(cleaned.slice(start, end + 1)) as Analysis;
 }
 
-function promptFor(data: YtData, metrics: Metrics, scores: Score[], thumbNote: string): string {
+function promptFor(data: YtData, metrics: Metrics, scores: Score[], thumbNote: string, slim = false): string {
   return (
     `Analisa video YouTube berikut dan jelaskan apa yang kurang.\n\n` +
-    `DATA (JSON):\n${JSON.stringify(buildPayload(data, metrics, scores))}\n\n` +
+    `DATA (JSON):\n${JSON.stringify(buildPayload(data, metrics, scores, slim))}\n\n` +
     `SKEMA OUTPUT:\n${SCHEMA}\n\n${thumbNote}`
   );
 }
@@ -155,15 +155,16 @@ async function callGemini(parts: any[], system: string, timeoutMs: number): Prom
   return (json.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("");
 }
 
-async function callMistral(system: string, prompt: string, timeoutMs: number): Promise<string> {
-  const key = process.env.MISTRAL_API_KEY;
-  if (!key) throw new AppError("MISTRAL_API_KEY belum diatur.", 500);
-  const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
+async function callGroq(system: string, prompt: string, timeoutMs: number): Promise<string> {
+  const key = process.env.GROQ_API_KEY;
+  if (!key) throw new AppError("GROQ_API_KEY belum diatur.", 500);
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
     body: JSON.stringify({
-      model: process.env.MISTRAL_MODEL || "mistral-small-latest",
+      model: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
       temperature: 0.4,
+      max_completion_tokens: 2000,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: system },
@@ -173,21 +174,23 @@ async function callMistral(system: string, prompt: string, timeoutMs: number): P
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) {
-    if (res.status === 429) throw new AppError("Kuota Mistral sedang habis.", 429);
-    throw new AppError(`Mistral error (${res.status}).`, 502);
+    const err = await res.json().catch(() => null);
+    const detail = String(err?.error?.message ?? "").slice(0, 120);
+    if (res.status === 429) throw new AppError(`Groq kena batas pemakaian (429)${detail ? `: ${detail}` : ""}`, 429);
+    throw new AppError(`Groq error (${res.status})${detail ? `: ${detail}` : ""}`, 502);
   }
   const json = await res.json();
   return json.choices?.[0]?.message?.content ?? "";
 }
 
-const MERGE_RULES = `Kamu menerima DUA analisa independen atas video yang sama (A dari Gemini, B dari Mistral) beserta data mentahnya.
+const MERGE_RULES = `Kamu menerima DUA analisa independen atas video yang sama (A dari Gemini, B dari Groq) beserta data mentahnya.
 Gabungkan menjadi SATU analisa dengan skema yang sama, ditambah dua field: "kesepakatan" dan "perbedaan".
 Aturan:
 - Poin yang disepakati A dan B ditulis tegas dan didahulukan.
 - Poin yang hanya muncul di salah satu hanya dimasukkan kalau didukung data mentah. Kalau bertentangan dengan data mentah, buang.
 - Kalau A dan B berbeda pendapat, pilih yang paling sesuai data mentah, lalu catat perbedaannya di "perbedaan".
 - "kesepakatan": 2 sampai 5 poin yang disetujui keduanya, satu kalimat tiap poin.
-- "perbedaan": 0 sampai 4 poin, formatnya "Gemini: ... | Mistral: ...". Isi [] kalau tidak ada perbedaan berarti.
+- "perbedaan": 0 sampai 4 poin, formatnya "Gemini: ... | Groq: ...". Isi [] kalau tidak ada perbedaan berarti.
 - Jangan menambah fakta atau angka baru yang tidak ada di data mentah atau di A dan B.
 - Sertakan thumbnail dari A apa adanya (B tidak melihat gambar).
 - Balas HANYA JSON valid.`;
@@ -196,16 +199,11 @@ async function merge(g: Analysis, m: Analysis, data: YtData, metrics: Metrics, s
   const prompt =
     `DATA MENTAH (JSON):\n${JSON.stringify(buildPayload(data, metrics, scores))}\n\n` +
     `ANALISA A (Gemini):\n${JSON.stringify(g)}\n\n` +
-    `ANALISA B (Mistral):\n${JSON.stringify(m)}\n\n` +
+    `ANALISA B (Groq):\n${JSON.stringify(m)}\n\n` +
     `SKEMA OUTPUT: sama dengan analisa di atas, ditambah "kesepakatan": ["..."] dan "perbedaan": ["..."].\n${SCHEMA}`;
   const system = `${SYSTEM}\n\n${MERGE_RULES}`;
 
-  let text: string;
-  try {
-    text = await callGemini([{ text: prompt }], system, 18_000);
-  } catch {
-    text = await callMistral(system, prompt, 18_000);
-  }
+  const text = await callGemini([{ text: prompt }], system, 18_000);
   const out = toAnalysis(text, "gabungan");
   out.thumbnail = g.thumbnail ?? null;
   out.sumber = "silang";
@@ -215,7 +213,7 @@ async function merge(g: Analysis, m: Analysis, data: YtData, metrics: Metrics, s
 }
 
 /**
- * Dua key aktif dan kuota ada: Gemini + Mistral menganalisa bersamaan lalu digabung.
+ * Dua key aktif dan kuota ada: Gemini + Groq menganalisa bersamaan lalu digabung.
  * Salah satu gagal atau kuotanya habis: pakai yang tersisa.
  */
 export async function analyzeWithLLM(
@@ -224,8 +222,8 @@ export async function analyzeWithLLM(
   scores: Score[],
 ): Promise<Analysis> {
   const hasG = !!process.env.GEMINI_API_KEY;
-  const hasM = !!process.env.MISTRAL_API_KEY;
-  if (!hasG && !hasM) throw new AppError("GEMINI_API_KEY dan MISTRAL_API_KEY belum diatur. Metrik tetap ditampilkan.", 500);
+  const hasR = !!process.env.GROQ_API_KEY;
+  if (!hasG && !hasR) throw new AppError("GEMINI_API_KEY dan GROQ_API_KEY belum diatur. Metrik tetap ditampilkan.", 500);
 
   const thumb = hasG ? await fetchThumbnail(data.video.id, data.video.thumbnail) : null;
 
@@ -238,36 +236,42 @@ export async function analyzeWithLLM(
     if (thumb) parts.push({ inlineData: { mimeType: thumb.mime, data: thumb.b64 } });
     return toAnalysis(await callGemini(parts, SYSTEM, 32_000), "Gemini");
   };
-  const runMistral = async (): Promise<Analysis> =>
-    toAnalysis(await callMistral(SYSTEM, promptFor(data, metrics, scores, "Thumbnail tidak tersedia."), 32_000), "Mistral");
+  const runGroq = async (): Promise<Analysis> =>
+    toAnalysis(await callGroq(SYSTEM, promptFor(data, metrics, scores, "Thumbnail tidak tersedia.", true), 32_000), "Groq");
 
-  const [gr, mr] = await Promise.allSettled([
+  const [gr, rr] = await Promise.allSettled([
     hasG ? runGemini() : Promise.reject(new AppError("GEMINI_API_KEY belum diatur.", 500)),
-    hasM ? runMistral() : Promise.reject(new AppError("MISTRAL_API_KEY belum diatur.", 500)),
+    hasR ? runGroq() : Promise.reject(new AppError("GROQ_API_KEY belum diatur.", 500)),
   ]);
-  const g = gr.status === "fulfilled" ? gr.value : null;
-  const m = mr.status === "fulfilled" ? mr.value : null;
+  const reason = (r: PromiseSettledResult<Analysis>) =>
+    r.status === "rejected" ? (r.reason instanceof AppError ? r.reason.message : "gagal dijalankan") : "";
+  if (gr.status === "rejected") console.error("Gemini gagal:", gr.reason);
+  if (rr.status === "rejected") console.error("Groq gagal:", rr.reason);
 
-  if (g && m) {
+  const g = gr.status === "fulfilled" ? gr.value : null;
+  const r = rr.status === "fulfilled" ? rr.value : null;
+
+  if (g && r) {
     try {
-      return await merge(g, m, data, metrics, scores);
-    } catch {
+      return await merge(g, r, data, metrics, scores);
+    } catch (e) {
+      console.error("Penggabungan gagal:", e);
       g.sumber = "gemini";
-      g.catatan_keterbatasan = `${g.catatan_keterbatasan ?? ""} Analisa silang gagal digabung, jadi yang tampil hanya analisa Gemini.`.trim();
+      g.catatan_keterbatasan = `${g.catatan_keterbatasan ?? ""} Analisa silang gagal digabung (${e instanceof AppError ? e.message : "error"}), jadi yang tampil hanya analisa Gemini.`.trim();
       return g;
     }
   }
   if (g) {
     g.sumber = "gemini";
-    if (hasM) g.catatan_keterbatasan = `${g.catatan_keterbatasan ?? ""} Mistral tidak tersedia saat ini, jadi tidak ada analisa silang.`.trim();
+    g.catatan_keterbatasan = `${g.catatan_keterbatasan ?? ""} Tidak ada analisa silang: ${reason(rr)}.`.trim();
     return g;
   }
-  if (m) {
-    m.thumbnail = null;
-    m.sumber = "mistral";
-    m.catatan_keterbatasan = `${m.catatan_keterbatasan ?? ""} Gemini tidak tersedia saat ini, jadi thumbnail tidak dinilai dan tidak ada analisa silang.`.trim();
-    return m;
+  if (r) {
+    r.thumbnail = null;
+    r.sumber = "groq";
+    r.catatan_keterbatasan = `${r.catatan_keterbatasan ?? ""} Gemini tidak tersedia (${reason(gr)}), jadi thumbnail tidak dinilai dan tidak ada analisa silang.`.trim();
+    return r;
   }
-  const reasons = [gr, mr].filter((r): r is PromiseRejectedResult => r.status === "rejected").map((r) => r.reason);
-  throw reasons.find((r) => r instanceof AppError) ?? reasons[0];
+  const reasons = [gr, rr].filter((x): x is PromiseRejectedResult => x.status === "rejected").map((x) => x.reason);
+  throw reasons.find((x) => x instanceof AppError) ?? reasons[0];
 }
