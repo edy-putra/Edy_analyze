@@ -26,16 +26,41 @@ const LONG_RULES = `FORMAT: video panjang.
 - tag_seo: 8 sampai 15 kata kunci.
 - deskripsi: dua baris pertama berisi hook dan kata kunci utama (terlihat sebelum "selengkapnya"), lalu ringkasan singkat, lalu chapter dengan timestamp format 00:00 yang benar-benar sesuai video (mulai dari 00:00, minimal 3 chapter; kalau video terlalu pendek, lewati chapter), lalu ajakan subscribe singkat, lalu hashtag.`;
 
+const SCORE_RULES = `PENILAIAN:
+- Semua "skor" adalah angka bulat 0 sampai 100. Nilai dengan jujur dan ketat: konten biasa berkisar 50 sampai 65, jangan beri di atas 85 kecuali benar-benar kuat.
+- Skor tiap opsi judul harus berbeda dan mencerminkan perbedaan kualitas (kejelasan, daya tarik, kesesuaian dengan isi, panjang).
+- skor.potensi = potensi performa konten secara keseluruhan (kekuatan hook, kejelasan topik, daya tarik isi). Ini penilaian kualitas, BUKAN prediksi jumlah views.
+- skor.judul, skor.deskripsi, skor.hashtag = kualitas hasil yang kamu tulis, dengan alasan singkat satu kalimat.
+AUDIENS:
+- profil = siapa yang paling mungkin menyukai video ini (perkiraan usia, minat, kebiasaan menonton).
+- potensi = "rendah", "sedang", atau "tinggi" berdasarkan kejelasan topik, kekuatan hook, dan daya tarik umum.
+- Jangan menyebut angka views, jumlah penonton, atau pendapatan.`;
+
 const SCHEMA = `{
   "ringkasan": "2-3 kalimat isi video",
+  "skor": {
+    "potensi": { "skor": 0, "alasan": "satu kalimat" },
+    "hook": { "skor": 0, "alasan": "satu kalimat" },
+    "judul": { "skor": 0, "alasan": "satu kalimat" },
+    "deskripsi": { "skor": 0, "alasan": "satu kalimat" },
+    "hashtag": { "skor": 0, "alasan": "satu kalimat" }
+  },
   "hook": { "penilaian": "penilaian 3-5 detik pertama: apakah menahan penonton", "saran": ["perbaikan spesifik"] },
   "kekuatan": ["..."],
   "kelemahan": ["..."],
-  "judul": [{ "teks": "judul", "gaya": "label singkat, misal: penasaran, angka, manfaat" }],
+  "judul": [{ "teks": "judul", "gaya": "label singkat, misal: penasaran, angka, manfaat", "skor": 0 }],
   "hashtag": ["#contoh"],
   "tag_seo": ["kata kunci"],
   "deskripsi": "teks deskripsi lengkap, siap tempel",
   "saran_thumbnail": ["ide thumbnail spesifik berdasarkan adegan di video"],
+  "audiens": {
+    "profil": "siapa penonton yang paling cocok",
+    "minat": ["minat atau topik yang mereka sukai"],
+    "potensi": "rendah | sedang | tinggi",
+    "alasan": "kenapa potensinya segitu",
+    "pendorong": ["hal yang membantu video ini menjangkau penonton"],
+    "penghambat": ["hal yang bisa menahan jangkauan"]
+  },
   "catatan": "keterbatasan atau hal yang perlu dicek pengguna"
 }`;
 
@@ -69,7 +94,7 @@ export async function POST(req: Request) {
     const isShorts = kind === "shorts" || (kind !== "long" && durationSec > 0 && durationSec <= 180);
     const prompt =
       `Tonton video ini lalu hasilkan analisa dan materi publikasi.\n\n` +
-      `${isShorts ? SHORTS_RULES : LONG_RULES}\n\nSKEMA OUTPUT:\n${SCHEMA}`;
+      `${isShorts ? SHORTS_RULES : LONG_RULES}\n\n${SCORE_RULES}\n\nSKEMA OUTPUT:\n${SCHEMA}`;
 
     const text = await generate(
       [{ fileData: { mimeType: f.mimeType, fileUri: f.uri } }, { text: prompt }],
