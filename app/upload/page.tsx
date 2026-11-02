@@ -1,282 +1,240 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import type { AnalyzeResponse } from "@/lib/types";
+import { useState } from "react";
+import ThemeToggle from "../ThemeToggle";
+import type { VideoAnalysis } from "@/lib/videoTypes";
 
-const nf = new Intl.NumberFormat("id-ID");
-const fmt = (n: number | null | undefined) => (n == null ? "-" : nf.format(Math.round(n)));
-const fmt1 = (n: number | null | undefined) => (n == null ? "-" : n.toFixed(1).replace(".", ","));
-const pad = (x: number) => String(x).padStart(2, "0");
-const dur = (s: number) => {
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-  return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`;
-};
-const tgl = (iso: string) =>
-  new Date(iso).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
-const bar = (s: number) => (s >= 75 ? "bg-good" : s >= 50 ? "bg-warn" : "bg-bad");
-const txt = (s: number) => (s >= 75 ? "text-good" : s >= 50 ? "text-warn" : "text-bad");
+type Kind = "auto" | "shorts" | "long";
+const MAX = 200 * 1024 * 1024;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function Card({ tag, title, children }: { tag: string; title: string; children: React.ReactNode }) {
+function readDuration(f: File): Promise<number> {
+  return new Promise((res) => {
+    const v = document.createElement("video");
+    v.preload = "metadata";
+    v.onloadedmetadata = () => { res(v.duration || 0); URL.revokeObjectURL(v.src); };
+    v.onerror = () => res(0);
+    v.src = URL.createObjectURL(f);
+  });
+}
+
+function upload(url: string, file: File, onProgress: (p: number) => void): Promise<{ name: string }> {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", url);
+    x.setRequestHeader("X-Goog-Upload-Offset", "0");
+    x.setRequestHeader("X-Goog-Upload-Command", "upload, finalize");
+    x.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    x.onload = () => {
+      if (x.status >= 200 && x.status < 300) {
+        try { resolve(JSON.parse(x.responseText).file); } catch { reject(new Error("Respons upload tidak terbaca.")); }
+      } else reject(new Error(`Upload ditolak Google (${x.status}).`));
+    };
+    x.onerror = () => reject(new Error("Upload ke Google gagal (jaringan atau pembatasan browser)."));
+    x.send(file);
+  });
+}
+
+function Copy({ text }: { text: string }) {
+  const [ok, setOk] = useState(false);
+  return (
+    <button type="button" className="neo-sm shrink-0 px-3 py-1 text-xs font-bold text-accent"
+      onClick={async () => { try { await navigator.clipboard.writeText(text); setOk(true); setTimeout(() => setOk(false), 1500); } catch {} }}>
+      {ok ? "Tersalin" : "Salin"}
+    </button>
+  );
+}
+
+function Card({ tag, title, action, children }: { tag: string; title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
     <section className="neo mt-6 p-5">
-      <span className="tag">{tag}</span>
+      <div className="flex items-center justify-between gap-3"><span className="tag">{tag}</span>{action}</div>
       <h2 className="mt-3 text-lg font-bold">{title}</h2>
       <div className="mt-3">{children}</div>
     </section>
   );
 }
 
-function List({ items }: { items?: string[] }) {
+function Bullets({ items }: { items?: string[] }) {
   if (!items?.length) return null;
-  return (
-    <ul className="mt-2 list-disc space-y-1.5 pl-5 text-[15px] leading-relaxed">
-      {items.map((t, i) => <li key={i}>{t}</li>)}
-    </ul>
-  );
+  return <ul className="mt-2 list-disc space-y-1.5 pl-5 text-[15px] leading-relaxed">{items.map((t, i) => <li key={i}>{t}</li>)}</ul>;
 }
 
-function Chip({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="neo-in px-4 py-3">
-      <div className="text-xs text-muted">{label}</div>
-      <div className="mt-0.5 text-lg font-bold">{value}</div>
-    </div>
-  );
-}
-
-type Theme = "auto" | "light" | "dark";
-
-export default function Home() {
-  const [url, setUrl] = useState("");
-  const [loading, setLoading] = useState(false);
+export default function UploadPage() {
+  const [file, setFile] = useState<File | null>(null);
+  const [dur, setDur] = useState(0);
+  const [kind, setKind] = useState<Kind>("auto");
+  const [phase, setPhase] = useState<"idle" | "upload" | "analyze">("idle");
+  const [pct, setPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<AnalyzeResponse | null>(null);
-  const [theme, setTheme] = useState<Theme>("auto");
+  const [r, setR] = useState<(VideoAnalysis) | null>(null);
 
-  useEffect(() => {
-    try {
-      const t = localStorage.getItem("theme");
-      if (t === "light" || t === "dark") setTheme(t);
-    } catch {}
-  }, []);
-  useEffect(() => {
-    const r = document.documentElement;
-    if (theme === "auto") r.removeAttribute("data-theme");
-    else r.setAttribute("data-theme", theme);
-    try { localStorage.setItem("theme", theme); } catch {}
-  }, [theme]);
+  async function pick(f: File | undefined) {
+    setError(null); setR(null);
+    if (!f) return;
+    if (!f.type.startsWith("video/")) return setError("File harus berupa video.");
+    if (f.size > MAX) return setError("Ukuran video maksimal 200 MB.");
+    setFile(f);
+    setDur(await readDuration(f));
+  }
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!url.trim() || loading) return;
-    setLoading(true); setError(null); setData(null);
+  async function run() {
+    if (!file || phase !== "idle") return;
+    setError(null); setR(null); setPct(0); setPhase("upload");
     try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
+      const init = await fetch("/api/upload-init", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: file.name, type: file.type, size: file.size }),
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? "Gagal menganalisa video.");
-      setData(json as AnalyzeResponse);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menganalisa video.");
+      const ij = await init.json();
+      if (!init.ok) throw new Error(ij.error ?? "Gagal menyiapkan upload.");
+      const up = await upload(ij.uploadUrl, file, setPct);
+
+      setPhase("analyze");
+      for (let i = 0; i < 25; i++) {
+        const res = await fetch("/api/analyze-video", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileName: up.name, kind, durationSec: dur }),
+        });
+        const j = await res.json();
+        if (res.status === 202) { await sleep(3000); continue; }
+        if (!res.ok) throw new Error(j.error ?? "Gagal menganalisa video.");
+        setR(j as VideoAnalysis);
+        return;
+      }
+      throw new Error("Pemrosesan video terlalu lama. Coba video yang lebih pendek.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Terjadi kesalahan.");
     } finally {
-      setLoading(false);
+      setPhase("idle");
     }
   }
 
-  const a = data?.analysis ?? null;
-  const m = data?.metrics ?? null;
-  const themes: [Theme, string][] = [["auto", "◐"], ["light", "☀"], ["dark", "☾"]];
+  const kinds: [Kind, string][] = [["auto", "Otomatis"], ["shorts", "Shorts"], ["long", "Video panjang"]];
+  const busy = phase !== "idle";
+  const mb = file ? (file.size / 1048576).toFixed(1).replace(".", ",") : "";
+  const menit = dur ? `${Math.floor(dur / 60)}:${String(Math.round(dur % 60)).padStart(2, "0")}` : "";
 
   return (
     <main className="mx-auto max-w-2xl px-5 pb-36 pt-6">
       <div className="flex items-center justify-between">
-        <Link href="/upload" className="neo-sm px-4 py-2 text-sm font-semibold">Upload video →</Link>
-        <div className="neo-sm flex gap-1 p-1" role="group" aria-label="Tema">
-          {themes.map(([t, icon]) => (
-            <button key={t} onClick={() => setTheme(t)} aria-label={`Tema ${t}`} aria-pressed={theme === t}
-              className={`h-9 w-9 rounded-full text-base ${theme === t ? "on" : ""}`}>{icon}</button>
-          ))}
-        </div>
+        <Link href="/" className="neo-sm px-4 py-2 text-sm font-semibold">← Analisa link</Link>
+        <ThemeToggle />
       </div>
 
       <header className="mt-4 text-center">
-        <div className="neo mx-auto flex h-16 w-16 items-center justify-center rounded-full text-2xl text-accent">▶</div>
-        <h1 className="mt-4 text-3xl font-extrabold tracking-tight">Edy Analyze</h1>
-        <p className="mt-1 text-sm text-muted">Link video jadi diagnosis · Gemini</p>
+        <div className="neo mx-auto flex h-16 w-16 items-center justify-center rounded-full text-2xl text-accent">⬆</div>
+        <h1 className="mt-4 text-3xl font-extrabold tracking-tight">Upload video</h1>
+        <p className="mt-1 text-sm text-muted">Judul, hashtag, dan deskripsi dari isi videomu · Gemini</p>
       </header>
 
-      <form id="f" onSubmit={submit} className="neo mt-8 p-5">
+      <section className="neo mt-8 p-5">
         <span className="tag">LANGKAH 1</span>
-        <h2 className="mt-3 text-lg font-bold">Tempel link video</h2>
-        <input
-          type="text" inputMode="url" value={url} onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://www.youtube.com/watch?v=..." aria-label="Link video YouTube"
-          className="neo-in mt-3 w-full bg-transparent px-4 py-3.5 text-base outline-none placeholder:text-muted"
-        />
-        <p className="mt-2 text-xs text-muted">Bisa link biasa, youtu.be, atau Shorts.</p>
-      </form>
+        <h2 className="mt-3 text-lg font-bold">Pilih video</h2>
+        <label className="neo-in mt-3 block cursor-pointer px-4 py-5 text-center">
+          <input type="file" accept="video/*" className="sr-only" disabled={busy} onChange={(e) => pick(e.target.files?.[0])} />
+          <span className="font-semibold text-accent">{file ? "Ganti video" : "Pilih video dari perangkat"}</span>
+          <span className="mt-1 block truncate text-xs text-muted">
+            {file ? `${file.name} · ${mb} MB${menit ? ` · ${menit}` : ""}` : "MP4, MOV, atau WebM. Maksimal 200 MB."}
+          </span>
+        </label>
+      </section>
 
-      {loading && <p className="mt-6 text-center text-sm text-muted">Mengambil data dan menyusun diagnosis. Biasanya 10 sampai 20 detik.</p>}
+      <section className="neo mt-6 p-5">
+        <span className="tag">LANGKAH 2</span>
+        <h2 className="mt-3 text-lg font-bold">Format konten</h2>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {kinds.map(([k, label]) => (
+            <button key={k} type="button" disabled={busy} onClick={() => setKind(k)} aria-pressed={kind === k}
+              className={`neo-sm px-4 py-2 text-sm font-semibold ${kind === k ? "on" : ""}`}>{label}</button>
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-muted">Otomatis: video 3 menit atau kurang dianggap Shorts.</p>
+      </section>
+
+      {busy && (
+        <section className="neo mt-6 p-5">
+          <p className="text-sm font-semibold">
+            {phase === "upload" ? `Mengunggah video… ${Math.round(pct * 100)}%` : "Gemini sedang menonton dan menganalisa videomu…"}
+          </p>
+          <div className="neo-in mt-2 h-3 overflow-hidden rounded-full p-0.5">
+            <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${phase === "upload" ? Math.max(pct * 100, 4) : 100}%`, opacity: phase === "upload" ? 1 : 0.5 }} />
+          </div>
+          {phase === "analyze" && <p className="mt-2 text-xs text-muted">Biasanya 30 sampai 90 detik. Jangan tutup halaman ini.</p>}
+        </section>
+      )}
       {error && <div role="alert" className="neo mt-6 p-4 text-sm font-medium text-bad">{error}</div>}
 
-      {data && m && (
+      {r && (
         <div>
-          <section className="neo mt-6 p-5">
-            <span className="tag">VIDEO</span>
-            {data.video.thumbnail && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={data.video.thumbnail} alt="Thumbnail" className="mt-3 aspect-video w-full rounded-2xl object-cover" />
-            )}
-            <h2 className="mt-3 font-bold leading-snug">{data.video.title}</h2>
-            <p className="mt-1 text-sm text-muted">
-              {data.channel.title}{data.channel.subscribers != null ? ` · ${fmt(data.channel.subscribers)} subscriber` : ""}
-            </p>
-            <p className="mt-1 text-xs text-muted">
-              Tayang {tgl(data.video.publishedAt)} ({m.self.hari}, {m.self.jam}.00 WIB) · {dur(data.video.durationSec)}
-            </p>
-            {data.overall != null && (
-              <p className="mt-4 text-sm text-muted">
-                Skor keseluruhan <span className={`text-2xl font-extrabold ${txt(data.overall)}`}>{data.overall}</span> / 100
-              </p>
-            )}
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <Chip label="Views" value={fmt(data.video.views)} />
-              <Chip label="Per hari" value={fmt(m.viewsPerDay)} />
-              <Chip label="Like" value={data.video.likesHidden ? "Disembunyikan" : `${fmt(data.video.likes)}${m.likeRate != null ? ` (${fmt1(m.likeRate)}%)` : ""}`} />
-              <Chip label="Komentar" value={fmt(data.video.comments)} />
-            </div>
-            {m.rank != null && (
-              <p className="mt-3 text-xs text-muted">Peringkat views {m.rank} dari {m.totalCompared + 1} video terbaru channel ini.</p>
-            )}
-            {data.cached && <p className="mt-1 text-xs text-muted">Hasil dari cache (kurang dari 6 jam).</p>}
-          </section>
+          <Card tag="RINGKASAN" title={r.format === "shorts" ? "Hasil untuk Shorts" : "Hasil untuk video panjang"}>
+            <p className="text-[15px] leading-relaxed">{r.ringkasan}</p>
+          </Card>
 
-          {a ? (
-            <>
-              <Card tag="DIAGNOSIS" title="Yang paling menahan video ini">
-                <p className="text-lg font-semibold leading-snug">{a.diagnosis_utama}</p>
-                <p className="mt-3 text-[15px] leading-relaxed text-muted">{a.ringkasan}</p>
-              </Card>
-              <Card tag="PRIORITAS" title="Perbaiki berurutan">
-                <ol className="space-y-3">
-                  {(a.prioritas ?? []).map((p, i) => (
-                    <li key={i} className="neo-in p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <p className="font-semibold leading-snug">{i + 1}. {p.aksi}</p>
-                        <span className="neo-sm shrink-0 px-3 py-1 text-xs font-bold text-accent">{p.dampak}</span>
-                      </div>
-                      <p className="mt-1.5 text-sm leading-relaxed text-muted">{p.alasan}</p>
-                    </li>
-                  ))}
-                </ol>
-              </Card>
-            </>
-          ) : (
-            <div className="neo mt-6 p-5">
-              <span className="tag">INFO</span>
-              <p className="mt-3 font-semibold">Analisa AI belum tersedia</p>
-              <p className="mt-1 text-sm text-muted">{data.analysisError ?? "Terjadi masalah saat menjalankan analisa AI."} Skor dan perbandingan tetap dari data video.</p>
-            </div>
-          )}
-
-          <Card tag="SKOR" title="Nilai per aspek">
-            <ul className="space-y-4">
-              {data.scores.map((s) => (
-                <li key={s.key}>
-                  <div className="flex items-baseline justify-between">
-                    <span className="text-sm font-semibold">{s.label}</span>
-                    <span className={`font-bold ${txt(s.score)}`}>{s.score}</span>
+          <Card tag="JUDUL" title="Pilihan judul">
+            <ul className="space-y-3">
+              {(r.judul ?? []).map((j, i) => (
+                <li key={i} className="neo-in flex items-start justify-between gap-3 p-4">
+                  <div className="min-w-0">
+                    <p className="font-semibold leading-snug">{j.teks}</p>
+                    <p className="mt-1 text-xs text-muted">{j.teks.length} karakter · {j.gaya}</p>
                   </div>
-                  <div className="neo-in mt-1.5 h-3 overflow-hidden rounded-full p-0.5">
-                    <div className={`h-full rounded-full ${bar(s.score)}`} style={{ width: `${Math.max(s.score, 4)}%` }} />
-                  </div>
-                  <p className="mt-1 text-xs text-muted">{s.note}</p>
+                  <Copy text={j.teks} />
                 </li>
               ))}
             </ul>
           </Card>
 
-          {a && (
-            <>
-              <Card tag="JUDUL" title="Penilaian judul">
-                <p className="text-[15px] leading-relaxed">{a.judul?.penilaian}</p>
-                <List items={a.judul?.saran} />
-              </Card>
-              {a.thumbnail && (
-                <Card tag="THUMBNAIL" title="Penilaian thumbnail">
-                  <p className="text-[15px] leading-relaxed">{a.thumbnail.penilaian}</p>
-                  <List items={a.thumbnail.saran} />
-                </Card>
-              )}
-              <Card tag="DESKRIPSI" title="Deskripsi dan tag">
-                <p className="text-[15px] leading-relaxed">{a.deskripsi_tag?.penilaian}</p>
-                <List items={a.deskripsi_tag?.saran} />
-              </Card>
-              <Card tag="KOMENTAR" title="Suara penonton">
-                <p className="text-[15px] leading-relaxed">{a.komentar?.sentimen}</p>
-                {([["Sering dibahas", a.komentar?.topik], ["Pertanyaan belum terjawab", a.komentar?.pertanyaan], ["Keluhan berulang", a.komentar?.keluhan]] as [string, string[] | undefined][])
-                  .filter(([, v]) => v?.length)
-                  .map(([h, v]) => (
-                    <div key={h} className="mt-4">
-                      <h3 className="text-sm font-bold">{h}</h3>
-                      <List items={v} />
-                    </div>
-                  ))}
-              </Card>
-            </>
-          )}
-
-          {m.rows.length > 0 && (
-            <Card tag="PEMBANDING" title="Dibanding video lain di channel">
-              <p className="mb-3 text-sm text-muted">
-                Median views {fmt(m.channelMedianViews)}. Video ini {m.viewsVsMedian != null ? `${fmt1(m.viewsVsMedian)}x` : "-"} dari median.
-              </p>
-              <div className="neo-in overflow-x-auto p-2">
-                <table className="w-full min-w-[520px] text-left text-sm">
-                  <thead className="text-muted">
-                    <tr>
-                      <th className="px-2 py-2 font-medium">Judul</th>
-                      <th className="px-2 py-2 text-right font-medium">Views</th>
-                      <th className="px-2 py-2 text-right font-medium">Per hari</th>
-                      <th className="px-2 py-2 text-right font-medium">Durasi</th>
-                      <th className="px-2 py-2 font-medium">Tayang</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[{ ...m.self, title: `${m.self.title} (ini)` }, ...m.rows].map((r, i) => (
-                      <tr key={`${r.id}-${i}`} className={i === 0 ? "font-bold text-accent" : ""}>
-                        <td className="max-w-[180px] truncate px-2 py-2" title={r.title}>{r.title}</td>
-                        <td className="px-2 py-2 text-right">{fmt(r.views)}</td>
-                        <td className="px-2 py-2 text-right">{fmt(r.viewsPerDay)}</td>
-                        <td className="px-2 py-2 text-right">{dur(r.durationSec)}</td>
-                        <td className="whitespace-nowrap px-2 py-2">{r.hari}, {r.jam}.00</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          <Card tag="HASHTAG" title="Hashtag" action={<Copy text={(r.hashtag ?? []).join(" ")} />}>
+            <div className="flex flex-wrap gap-2">
+              {(r.hashtag ?? []).map((h, i) => <span key={i} className="neo-sm px-3 py-1.5 text-sm font-semibold text-accent">{h}</span>)}
+            </div>
+            {r.tag_seo?.length ? (
+              <div className="mt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-bold">Tag SEO (kolom tag di YouTube Studio)</h3>
+                  <Copy text={r.tag_seo.join(", ")} />
+                </div>
+                <p className="mt-2 text-sm leading-relaxed text-muted">{r.tag_seo.join(", ")}</p>
               </div>
-            </Card>
-          )}
+            ) : null}
+          </Card>
 
-          <p className="mt-8 text-xs leading-relaxed text-muted">
-            {a?.catatan_keterbatasan ? `${a.catatan_keterbatasan} ` : ""}
-            Retention, CTR, dan impressions tidak ada di data publik, jadi diagnosis ini berdasarkan data yang terlihat dari luar.
-          </p>
+          <Card tag="DESKRIPSI" title="Deskripsi siap tempel" action={<Copy text={r.deskripsi ?? ""} />}>
+            <div className="neo-in whitespace-pre-wrap p-4 text-sm leading-relaxed">{r.deskripsi}</div>
+          </Card>
+
+          <Card tag="HOOK" title="Detik-detik pertama">
+            <p className="text-[15px] leading-relaxed">{r.hook?.penilaian}</p>
+            <Bullets items={r.hook?.saran} />
+          </Card>
+
+          <Card tag="EVALUASI" title="Kekuatan dan kelemahan">
+            <h3 className="text-sm font-bold">Kekuatan</h3>
+            <Bullets items={r.kekuatan} />
+            <h3 className="mt-4 text-sm font-bold">Kelemahan</h3>
+            <Bullets items={r.kelemahan} />
+          </Card>
+
+          {r.saran_thumbnail?.length ? (
+            <Card tag="THUMBNAIL" title="Ide thumbnail">
+              <Bullets items={r.saran_thumbnail} />
+            </Card>
+          ) : null}
+
+          {r.catatan && <p className="mt-8 text-xs leading-relaxed text-muted">{r.catatan}</p>}
         </div>
       )}
 
       <div className="fixed inset-x-0 bottom-0 z-10 px-4 pb-4 pt-3" style={{ background: "var(--bg)", paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
         <div className="mx-auto flex max-w-2xl items-center justify-between gap-4">
           <div className="min-w-0 text-sm">
-            <div className="font-bold">{data?.overall != null ? `Skor ${data.overall}/100` : "Siap menganalisa"}</div>
-            <div className="truncate text-xs text-muted">{data ? data.video.title : "Tempel link di atas"}</div>
+            <div className="font-bold">{file ? "Video siap" : "Belum ada video"}</div>
+            <div className="truncate text-xs text-muted">{file ? file.name : "Pilih video di atas"}</div>
           </div>
-          <button type="submit" form="f" disabled={loading || !url.trim()} className="btn shrink-0">
-            {loading ? "Menganalisa…" : "Analisa"}
+          <button type="button" onClick={run} disabled={!file || busy} className="btn shrink-0">
+            {busy ? "Memproses…" : "Analisa"}
           </button>
         </div>
       </div>
