@@ -130,24 +130,39 @@ async function callGemini(parts: any[], system: string, timeoutMs: number): Prom
     generationConfig: { responseMimeType: "application/json", temperature: 0.4 },
   });
 
+  // Satu batas waktu untuk semua percobaan. 503 (server Gemini sibuk) dicoba ulang sebentar,
+  // 404 atau 429 (model tidak ada atau kuota model itu habis) lanjut ke model berikutnya.
+  const signal = AbortSignal.timeout(timeoutMs);
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   let res: Response | null = null;
-  for (const model of models) {
-    res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body,
-        signal: AbortSignal.timeout(timeoutMs),
-      },
-    );
-    if (res.status !== 404) break;
+  outer: for (const model of models) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+          body,
+          signal,
+        },
+      );
+      if (res.ok) break outer;
+      if (res.status === 500 || res.status === 503 || res.status === 504) {
+        await sleep(1500 * (attempt + 1));
+        continue;
+      }
+      if (res.status === 404 || res.status === 429) break;
+      break outer;
+    }
   }
 
   if (!res || !res.ok) {
     const status = res?.status ?? 0;
     if (status === 429) throw new AppError("Kuota Gemini sedang habis.", 429);
     if (status === 404) throw new AppError("Model Gemini tidak ditemukan. Isi GEMINI_MODEL di Vercel.", 502);
+    if (status === 500 || status === 503 || status === 504) {
+      throw new AppError(`Server Gemini sedang sibuk (${status}), sudah dicoba beberapa kali.`, 503);
+    }
     const err = await res?.json().catch(() => null);
     throw new AppError(`Gemini menolak permintaan (${status}): ${err?.error?.message ?? "tanpa detail"}`, 502);
   }
