@@ -46,7 +46,7 @@ export async function POST(req: Request) {
       analysis,
       analysisError,
     };
-    const dual = !!process.env.GEMINI_API_KEY && !!process.env.MISTRAL_API_KEY;
+    const dual = !!process.env.GEMINI_API_KEY && !!(process.env.GROQ_API_KEY || process.env.OPENROUTER_API_KEY);
     if (analysis && (!dual || analysis.sumber === "silang")) cacheSet(videoId, result, SIX_HOURS);
     return NextResponse.json(result);
   } catch (e) {
