@@ -155,35 +155,58 @@ async function callGemini(parts: any[], system: string, timeoutMs: number): Prom
   return (json.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("");
 }
 
-async function callGroq(system: string, prompt: string, timeoutMs: number): Promise<string> {
-  const key = process.env.GROQ_API_KEY;
-  if (!key) throw new AppError("GROQ_API_KEY belum diatur.", 500);
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      model: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
-      temperature: 0.4,
-      max_completion_tokens: 2000,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: prompt },
-      ],
-    }),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => null);
-    const detail = String(err?.error?.message ?? "").slice(0, 120);
-    if (res.status === 429) throw new AppError(`Groq kena batas pemakaian (429)${detail ? `: ${detail}` : ""}`, 429);
-    throw new AppError(`Groq error (${res.status})${detail ? `: ${detail}` : ""}`, 502);
-  }
-  const json = await res.json();
-  return json.choices?.[0]?.message?.content ?? "";
+interface ChatOpts {
+  label: string;
+  url: string;
+  key: string;
+  models: string[];
+  system: string;
+  prompt: string;
+  timeoutMs: number;
+  json: boolean;
+  headers?: Record<string, string>;
 }
 
-const MERGE_RULES = `Kamu menerima DUA analisa independen atas video yang sama (A dari Gemini, B dari Groq) beserta data mentahnya.
+/** Panggil API gaya OpenAI (Groq, OpenRouter). Coba model berurutan, dan tanpa mode JSON kalau ditolak. */
+async function callChat(o: ChatOpts): Promise<string> {
+  const signal = AbortSignal.timeout(o.timeoutMs);
+  let last = "";
+  for (const model of o.models) {
+    for (const useJson of o.json ? [true, false] : [false]) {
+      const res = await fetch(o.url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${o.key}`, ...(o.headers ?? {}) },
+        body: JSON.stringify({
+          model,
+          temperature: 0.4,
+          max_tokens: 2500,
+          ...(useJson ? { response_format: { type: "json_object" } } : {}),
+          messages: [
+            { role: "system", content: o.system },
+            { role: "user", content: o.prompt },
+          ],
+        }),
+        signal,
+      });
+      if (res.ok) {
+        const j = await res.json();
+        const t: string = j.choices?.[0]?.message?.content ?? "";
+        if (t) return t;
+        last = `${o.label} membalas kosong (${model})`;
+        continue;
+      }
+      const err = await res.json().catch(() => null);
+      const detail = String(err?.error?.message ?? "").slice(0, 100);
+      last = `${o.label} error ${res.status} (${model})${detail ? `: ${detail}` : ""}`;
+      if (res.status === 401 || res.status === 403 || res.status === 429) {
+        throw new AppError(last, res.status === 429 ? 429 : 502);
+      }
+    }
+  }
+  throw new AppError(last || `${o.label} gagal`, 502);
+}
+
+const MERGE_RULES = `Kamu menerima DUA analisa independen atas video yang sama (A dari Gemini, B dari model kedua) beserta data mentahnya.
 Gabungkan menjadi SATU analisa dengan skema yang sama, ditambah dua field: "kesepakatan" dan "perbedaan".
 Aturan:
 - Poin yang disepakati A dan B ditulis tegas dan didahulukan.
@@ -195,11 +218,11 @@ Aturan:
 - Sertakan thumbnail dari A apa adanya (B tidak melihat gambar).
 - Balas HANYA JSON valid.`;
 
-async function merge(g: Analysis, m: Analysis, data: YtData, metrics: Metrics, scores: Score[]): Promise<Analysis> {
+async function merge(g: Analysis, m: Analysis, who: string, data: YtData, metrics: Metrics, scores: Score[]): Promise<Analysis> {
   const prompt =
     `DATA MENTAH (JSON):\n${JSON.stringify(buildPayload(data, metrics, scores))}\n\n` +
     `ANALISA A (Gemini):\n${JSON.stringify(g)}\n\n` +
-    `ANALISA B (Groq):\n${JSON.stringify(m)}\n\n` +
+    `ANALISA B (${who}):\n${JSON.stringify(m)}\n\n` +
     `SKEMA OUTPUT: sama dengan analisa di atas, ditambah "kesepakatan": ["..."] dan "perbedaan": ["..."].\n${SCHEMA}`;
   const system = `${SYSTEM}\n\n${MERGE_RULES}`;
 
@@ -207,14 +230,17 @@ async function merge(g: Analysis, m: Analysis, data: YtData, metrics: Metrics, s
   const out = toAnalysis(text, "gabungan");
   out.thumbnail = g.thumbnail ?? null;
   out.sumber = "silang";
+  out.pembanding = who;
   out.kesepakatan = Array.isArray(out.kesepakatan) ? out.kesepakatan : [];
   out.perbedaan = Array.isArray(out.perbedaan) ? out.perbedaan : [];
   return out;
 }
 
+const errMsg = (e: unknown) => (e instanceof AppError ? e.message : "gagal dijalankan");
+
 /**
- * Dua key aktif dan kuota ada: Gemini + Groq menganalisa bersamaan lalu digabung.
- * Salah satu gagal atau kuotanya habis: pakai yang tersisa.
+ * Gemini + analis kedua (Groq dulu, kalau gagal OpenRouter) menganalisa bersamaan, lalu digabung.
+ * Kalau salah satu gagal atau kuotanya habis: pakai yang tersisa, dengan keterangan.
  */
 export async function analyzeWithLLM(
   data: YtData,
@@ -222,8 +248,10 @@ export async function analyzeWithLLM(
   scores: Score[],
 ): Promise<Analysis> {
   const hasG = !!process.env.GEMINI_API_KEY;
-  const hasR = !!process.env.GROQ_API_KEY;
-  if (!hasG && !hasR) throw new AppError("GEMINI_API_KEY dan GROQ_API_KEY belum diatur. Metrik tetap ditampilkan.", 500);
+  const hasSecond = !!(process.env.GROQ_API_KEY || process.env.OPENROUTER_API_KEY);
+  if (!hasG && !hasSecond) {
+    throw new AppError("Belum ada API key AI yang diatur (GEMINI_API_KEY, GROQ_API_KEY, atau OPENROUTER_API_KEY). Metrik tetap ditampilkan.", 500);
+  }
 
   const thumb = hasG ? await fetchThumbnail(data.video.id, data.video.thumbnail) : null;
 
@@ -236,42 +264,85 @@ export async function analyzeWithLLM(
     if (thumb) parts.push({ inlineData: { mimeType: thumb.mime, data: thumb.b64 } });
     return toAnalysis(await callGemini(parts, SYSTEM, 32_000), "Gemini");
   };
-  const runGroq = async (): Promise<Analysis> =>
-    toAnalysis(await callGroq(SYSTEM, promptFor(data, metrics, scores, "Thumbnail tidak tersedia.", true), 32_000), "Groq");
+
+  const runSecond = async (): Promise<{ a: Analysis; who: string }> => {
+    const prompt = promptFor(data, metrics, scores, "Thumbnail tidak tersedia.", true);
+    const errs: string[] = [];
+
+    const gk = process.env.GROQ_API_KEY;
+    if (gk) {
+      try {
+        const text = await callChat({
+          label: "Groq",
+          url: "https://api.groq.com/openai/v1/chat/completions",
+          key: gk,
+          models: [process.env.GROQ_MODEL || "openai/gpt-oss-120b"],
+          system: SYSTEM,
+          prompt,
+          timeoutMs: 24_000,
+          json: true,
+        });
+        return { a: toAnalysis(text, "Groq"), who: "Groq" };
+      } catch (e) {
+        errs.push(errMsg(e));
+      }
+    }
+
+    const ok = process.env.OPENROUTER_API_KEY;
+    if (ok) {
+      try {
+        const text = await callChat({
+          label: "OpenRouter",
+          url: "https://openrouter.ai/api/v1/chat/completions",
+          key: ok,
+          models: Array.from(new Set([process.env.OPENROUTER_MODEL, "openrouter/free"].filter(Boolean))) as string[],
+          system: SYSTEM,
+          prompt,
+          timeoutMs: 24_000,
+          json: false,
+          headers: { "X-Title": "Edy Analyze" },
+        });
+        return { a: toAnalysis(text, "OpenRouter"), who: "OpenRouter" };
+      } catch (e) {
+        errs.push(errMsg(e));
+      }
+    }
+    throw new AppError(errs.join("; ") || "GROQ_API_KEY atau OPENROUTER_API_KEY belum diatur", 502);
+  };
 
   const [gr, rr] = await Promise.allSettled([
-    hasG ? runGemini() : Promise.reject(new AppError("GEMINI_API_KEY belum diatur.", 500)),
-    hasR ? runGroq() : Promise.reject(new AppError("GROQ_API_KEY belum diatur.", 500)),
+    hasG ? runGemini() : Promise.reject(new AppError("GEMINI_API_KEY belum diatur", 500)),
+    hasSecond ? runSecond() : Promise.reject(new AppError("GROQ_API_KEY / OPENROUTER_API_KEY belum diatur", 500)),
   ]);
-  const reason = (r: PromiseSettledResult<Analysis>) =>
-    r.status === "rejected" ? (r.reason instanceof AppError ? r.reason.message : "gagal dijalankan") : "";
   if (gr.status === "rejected") console.error("Gemini gagal:", gr.reason);
-  if (rr.status === "rejected") console.error("Groq gagal:", rr.reason);
+  if (rr.status === "rejected") console.error("Analis kedua gagal:", rr.reason);
 
   const g = gr.status === "fulfilled" ? gr.value : null;
   const r = rr.status === "fulfilled" ? rr.value : null;
+  const whyG = gr.status === "rejected" ? errMsg(gr.reason) : "";
+  const whyR = rr.status === "rejected" ? errMsg(rr.reason) : "";
 
   if (g && r) {
     try {
-      return await merge(g, r, data, metrics, scores);
+      return await merge(g, r.a, r.who, data, metrics, scores);
     } catch (e) {
       console.error("Penggabungan gagal:", e);
       g.sumber = "gemini";
-      g.catatan_keterbatasan = `${g.catatan_keterbatasan ?? ""} Analisa silang gagal digabung (${e instanceof AppError ? e.message : "error"}), jadi yang tampil hanya analisa Gemini.`.trim();
+      g.catatan_keterbatasan = `${g.catatan_keterbatasan ?? ""} Analisa silang gagal digabung (${errMsg(e)}), jadi yang tampil hanya analisa Gemini.`.trim();
       return g;
     }
   }
   if (g) {
     g.sumber = "gemini";
-    g.catatan_keterbatasan = `${g.catatan_keterbatasan ?? ""} Tidak ada analisa silang: ${reason(rr)}.`.trim();
+    g.catatan_keterbatasan = `${g.catatan_keterbatasan ?? ""} Tidak ada analisa silang. Alasan: ${whyR}.`.trim();
     return g;
   }
   if (r) {
-    r.thumbnail = null;
-    r.sumber = "groq";
-    r.catatan_keterbatasan = `${r.catatan_keterbatasan ?? ""} Gemini tidak tersedia (${reason(gr)}), jadi thumbnail tidak dinilai dan tidak ada analisa silang.`.trim();
-    return r;
+    r.a.thumbnail = null;
+    r.a.sumber = "kedua";
+    r.a.pembanding = r.who;
+    r.a.catatan_keterbatasan = `${r.a.catatan_keterbatasan ?? ""} Gemini tidak tersedia (${whyG}), jadi thumbnail tidak dinilai dan tidak ada analisa silang.`.trim();
+    return r.a;
   }
-  const reasons = [gr, rr].filter((x): x is PromiseRejectedResult => x.status === "rejected").map((x) => x.reason);
-  throw reasons.find((x) => x instanceof AppError) ?? reasons[0];
+  throw new AppError(`Gemini: ${whyG}. Analis kedua: ${whyR}.`, 502);
 }
