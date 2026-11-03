@@ -161,7 +161,7 @@ export default function Home() {
                 <section className="neo mt-6 p-5">
                   <span className="tag">SUMBER ANALISA</span>
                   <p className="mt-3 font-semibold">
-                    {a.sumber === "silang" ? "Analisa silang: Gemini + Groq" : a.sumber === "gemini" ? "Analisa Gemini saja" : "Analisa Groq saja"}
+                    {a.sumber === "silang" ? `Analisa silang: Gemini + ${a.pembanding ?? "model kedua"}` : a.sumber === "gemini" ? "Analisa Gemini saja" : `Analisa ${a.pembanding ?? "model kedua"} saja`}
                   </p>
                   <p className="mt-1 text-sm text-muted">
                     {a.sumber === "silang"
