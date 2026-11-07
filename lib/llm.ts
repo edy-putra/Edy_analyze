@@ -9,6 +9,10 @@ Aturan:
 - Saran harus spesifik dan bisa langsung dikerjakan (contoh: beri 3 alternatif judul), bukan nasihat umum.
 - Urutkan "prioritas" dari dampak terbesar ke terkecil (maksimal 5).
 - Kalau gambar thumbnail disertakan, nilai dari apa yang benar-benar terlihat: keterbacaan teks di layar kecil, kontras, fokus visual, ekspresi/objek utama, dan kecocokan dengan judul.
+- FORMAT KONTEN: field "format_konten" bernilai "shorts" atau "long". Sesuaikan SELURUH analisa dengan formatnya.
+  - Jika "shorts": nilai dengan kriteria Shorts: hook di 1 sampai 3 detik pertama, daya tonton ulang (loop), judul pendek dan langsung, hashtag termasuk #Shorts, deskripsi singkat. JANGAN menyarankan chapter atau timestamp, judul panjang berisi kata kunci SEO, deskripsi panjang, atau durasi lebih panjang. Sebagian besar penonton Shorts datang dari feed, bukan dari pencarian.
+  - Jika "long": nilai dengan kriteria video panjang: judul dan thumbnail sebagai pemicu klik, kata kunci SEO di judul dan deskripsi, chapter, deskripsi yang informatif, dan pertahanan penonton.
+  - Kalau "pembanding_sejenis" bernilai false, perbandingan dengan video lain di channel bercampur antara Shorts dan video panjang. Sebut itu sebagai keterbatasan dan jangan menarik kesimpulan kuat dari perbandingan tersebut.
 - Balas HANYA dengan JSON valid sesuai skema, tanpa teks lain.`;
 
 const SCHEMA = `{
@@ -47,6 +51,8 @@ function buildPayload(data: YtData, m: Metrics, scores: Score[], slim = false) {
       jumlah_video: data.channel.videoCount,
     },
     metrik: {
+      format_konten: m.format,
+      pembanding_sejenis: m.pembandingSerupa,
       umur_hari: r1(m.ageDays),
       views_per_hari: r1(m.viewsPerDay),
       like_rate_persen: r1(m.likeRate),
@@ -231,6 +237,7 @@ Aturan:
 - "perbedaan": 0 sampai 4 poin, formatnya "Gemini: ... | Groq: ...". Isi [] kalau tidak ada perbedaan berarti.
 - Jangan menambah fakta atau angka baru yang tidak ada di data mentah atau di A dan B.
 - Sertakan thumbnail dari A apa adanya (B tidak melihat gambar).
+- Pastikan hasil akhir sesuai "format_konten" di data mentah. Untuk Shorts, buang saran chapter, timestamp, judul panjang berbasis SEO, atau deskripsi panjang.
 - Balas HANYA JSON valid.`;
 
 async function merge(g: Analysis, m: Analysis, who: string, data: YtData, metrics: Metrics, scores: Score[]): Promise<Analysis> {
