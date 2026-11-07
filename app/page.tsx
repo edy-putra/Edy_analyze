@@ -136,7 +136,7 @@ export default function Home() {
               {data.channel.title}{data.channel.subscribers != null ? ` · ${fmt(data.channel.subscribers)} subscriber` : ""}
             </p>
             <p className="mt-1 text-xs text-muted">
-              Tayang {tgl(data.video.publishedAt)} ({m.self.hari}, {m.self.jam}.00 WIB) · {dur(data.video.durationSec)}
+              Tayang {tgl(data.video.publishedAt)} ({m.self.hari}, {m.self.jam}.00 WIB) · {dur(data.video.durationSec)} · {m.format === "shorts" ? "Shorts" : "Video panjang"}
             </p>
             {data.overall != null && (
               <p className="mt-4 text-sm text-muted">
@@ -150,7 +150,10 @@ export default function Home() {
               <Chip label="Komentar" value={fmt(data.video.comments)} />
             </div>
             {m.rank != null && (
-              <p className="mt-3 text-xs text-muted">Peringkat views {m.rank} dari {m.totalCompared + 1} video terbaru channel ini.</p>
+              <p className="mt-3 text-xs text-muted">Peringkat views {m.rank} dari {m.totalCompared + 1} {m.pembandingSerupa ? (m.format === "shorts" ? "Shorts" : "video panjang") : "video"} terbaru channel ini.</p>
+            )}
+            {!m.pembandingSerupa && m.totalCompared > 0 && (
+              <p className="mt-1 text-xs text-muted">Video sejenis di channel ini kurang dari 3, jadi pembandingnya campur Shorts dan video panjang. Skor performa dan durasi tidak dihitung.</p>
             )}
             {data.cached && <p className="mt-1 text-xs text-muted">Hasil dari cache (kurang dari 6 jam).</p>}
           </section>
