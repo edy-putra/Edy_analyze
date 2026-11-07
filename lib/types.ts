@@ -47,6 +47,8 @@ export interface VideoRow {
 }
 
 export interface Metrics {
+  format: "shorts" | "long";
+  pembandingSerupa: boolean;
   ageDays: number;
   isNewVideo: boolean;
   viewsPerDay: number;
